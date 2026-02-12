@@ -1,0 +1,30 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets and environment
+.env
+.env.*
+!.env.example
+
+# Local databases and runtime files
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+nul
+
+# Local assistant/project helpers not part of app
+.claude/
+ai-coders-context-main/

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resumo YouTube</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 30px; color: #ff6b6b; }
+        .video-card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+        .video-title { font-size: 1.1em; margin-bottom: 10px; color: #fff; }
+        .channel { color: #e94560; font-size: 0.9em; margin-bottom: 10px; }
+        .summary { background: #0f3460; padding: 15px; border-radius: 8px; line-height: 1.6; }
+        .video-link {
+            display: inline-block;
+            margin-top: 10px;
+            color: #4cc9f0;
+            text-decoration: none;
+        }
+        .video-link:hover { text-decoration: underline; }
+        .loading { text-align: center; padding: 40px; }
+        .error { background: #ff6b6b; color: white; padding: 20px; border-radius: 8px; text-align: center; }
+        .refresh-btn {
+            display: block;
+            width: 100%;
+            max-width: 200px;
+            margin: 20px auto;
+            padding: 12px 24px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        .refresh-btn:hover { background: #ff6b6b; }
+        .empty { text-align: center; padding: 40px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📺 Resumos de Vídeos</h1>
+        <button class="refresh-btn" onclick="loadVideos()">🔄 Atualizar</button>
+        <div id="content">
+            <div class="loading">Carregando...</div>
+        </div>
+    </div>
+
+    <script>
+        async function loadVideos() {
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading">Carregando...</div>';
+
+            try {
+                const response = await fetch('/api/resumo', { method: 'POST' });
+                const data = await response.json();
+
+                if (!data.videos || data.videos.length === 0) {
+                    content.innerHTML = '<div class="empty">Nenhum resumo disponível.<br>Os vídeos já processados aparecem aqui.</div>';
+                    return;
+                }
+
+                content.innerHTML = data.videos.map(video => `
+                    <div class="video-card">
+                        <div class="video-title">${escapeHtml(video.title)}</div>
+                        <div class="channel">${escapeHtml(video.channel_title)}</div>
+                        <div class="summary">${escapeHtml(video.summary || 'Resumo não disponível')}</div>
+                        <a href="https://www.youtube.com/watch?v=${video.video_id}" target="_blank" class="video-link">
+                            🎬 Assistir no YouTube
+                        </a>
+                    </div>
+                `).join('');
+
+            } catch (error) {
+                content.innerHTML = `<div class="error">Erro ao carregar: ${error.message}</div>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load on page load
+        loadVideos();
+    </script>
+</body>
+</html>
