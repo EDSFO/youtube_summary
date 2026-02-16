@@ -53,6 +53,33 @@ def update_env_channel_ids(channel_ids):
         file.writelines(lines)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_channel_name_map(channel_ids):
+    ids = dedupe_keep_order(channel_ids)
+    if not ids:
+        return {}
+
+    channel_name_map = {}
+    try:
+        yt_service = YouTubeService()
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            response = yt_service.youtube.channels().list(
+                part="snippet",
+                id=",".join(chunk),
+                maxResults=50,
+            ).execute()
+            for item in response.get("items", []):
+                channel_id = item.get("id", "")
+                channel_title = item.get("snippet", {}).get("title", "")
+                if channel_id and channel_title:
+                    channel_name_map[channel_id] = channel_title
+    except Exception:
+        return {}
+
+    return channel_name_map
+
+
 async def summarize_single_video(video):
     db = Database()
     await db.init_db()
@@ -155,6 +182,7 @@ if "summary_results_map" not in st.session_state:
 
 base_channel_ids = settings.channel_ids_list
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
+channel_name_map = get_channel_name_map(tuple(all_channel_ids))
 
 with st.sidebar:
     st.subheader("Canais")
@@ -174,6 +202,9 @@ with st.sidebar:
             "Channel IDs para consultar",
             options=all_channel_ids,
             default=all_channel_ids,
+            format_func=lambda cid: (
+                f"{channel_name_map.get(cid, 'Canal nao encontrado')} ({cid})"
+            ),
         )
     else:
         selected_channels = []
@@ -182,6 +213,19 @@ with st.sidebar:
     if st.button("Salvar channel IDs no .env"):
         update_env_channel_ids(all_channel_ids)
         st.success("CHANNEL_IDS salvo no .env")
+
+    st.markdown("### Canais adicionados")
+    if all_channel_ids:
+        channel_rows = [
+            {
+                "Canal": channel_name_map.get(channel_id, "Canal nao encontrado"),
+                "Channel ID": channel_id,
+            }
+            for channel_id in all_channel_ids
+        ]
+        st.dataframe(channel_rows, use_container_width=True, hide_index=True, height=360)
+    else:
+        st.caption("Nenhum canal adicionado.")
 
 col1, col2 = st.columns([1, 1])
 with col1:
