@@ -1,8 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
-import os
-
-load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -13,20 +10,20 @@ class Settings(BaseSettings):
     )
 
     # YouTube
-    youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "")
-    channel_ids: str = os.getenv("CHANNEL_IDS", "")
+    youtube_api_key: str = ""
+    channel_ids: str = ""
 
     # OpenRouter
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "gpt-4o")
+    openrouter_api_key: str = ""
+    openrouter_model: str = "gpt-4o"
 
     # Telegram
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     # Server
-    host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = int(os.getenv("PORT", "8000"))
+    host: str = "0.0.0.0"
+    port: int = 8000
 
     @property
     def channel_ids_list(self):
@@ -35,4 +32,11 @@ class Settings(BaseSettings):
             return []
         return [cid.strip() for cid in self.channel_ids.split(",") if cid.strip()]
 
-settings = Settings()
+
+def get_settings() -> Settings:
+    # Recarrega .env e permite atualização de variáveis em processos longos.
+    load_dotenv(override=True)
+    return Settings()
+
+
+settings = get_settings()

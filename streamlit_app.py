@@ -4,15 +4,14 @@ from datetime import date, timedelta
 
 import httpx
 import streamlit as st
-from dotenv import load_dotenv
 
-from app.config import settings
+from app.config import get_settings
 from app.models.database import Database
 from app.services.openrouter import OpenRouterService
 from app.services.telegram import TelegramService
 from app.services.youtube import YouTubeService
 
-load_dotenv()
+settings = get_settings()
 
 
 def dedupe_keep_order(values):

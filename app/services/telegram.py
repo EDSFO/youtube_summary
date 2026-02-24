@@ -4,13 +4,14 @@ import logging
 from telegram import Update
 from telegram.ext import AIORateLimiter, Application, CommandHandler, ContextTypes
 
-from app.config import settings
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 class TelegramService:
     def __init__(self):
+        settings = get_settings()
         self.token = settings.telegram_bot_token
         self.chat_id = settings.telegram_chat_id
         self.application = None

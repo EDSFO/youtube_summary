@@ -1,12 +1,13 @@
 import logging
 from openai import OpenAI
-from app.config import settings
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 class OpenRouterService:
     def __init__(self):
+        settings = get_settings()
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=settings.openrouter_api_key,

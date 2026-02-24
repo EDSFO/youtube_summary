@@ -4,14 +4,15 @@ from typing import Iterable, Optional
 
 from googleapiclient.discovery import build
 
-from app.config import settings
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 class YouTubeService:
     def __init__(self):
-        self.api_key = settings.youtube_api_key
+        self.settings = get_settings()
+        self.api_key = self.settings.youtube_api_key
         self.youtube = build("youtube", "v3", developerKey=self.api_key)
 
     def get_yesterday_videos(self, channel_id: str = None):
@@ -56,7 +57,7 @@ class YouTubeService:
             if channel_ids:
                 selected_channels = [cid.strip() for cid in channel_ids if cid and cid.strip()]
             else:
-                selected_channels = settings.channel_ids_list
+                selected_channels = self.settings.channel_ids_list
 
             all_videos = []
 
