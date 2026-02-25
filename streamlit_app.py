@@ -63,11 +63,15 @@ def get_channel_name_map(channel_ids):
         yt_service = YouTubeService()
         for start in range(0, len(ids), 50):
             chunk = ids[start : start + 50]
-            response = yt_service.youtube.channels().list(
-                part="snippet",
-                id=",".join(chunk),
-                maxResults=50,
-            ).execute()
+            try:
+                response = yt_service.youtube.channels().list(
+                    part="snippet",
+                    id=",".join(chunk),
+                    maxResults=50,
+                ).execute()
+            except Exception:
+                # Ignora falha de um bloco e segue para os demais IDs.
+                continue
             for item in response.get("items", []):
                 channel_id = item.get("id", "")
                 channel_title = item.get("snippet", {}).get("title", "")
@@ -178,10 +182,27 @@ if "filtered_videos" not in st.session_state:
     st.session_state.filtered_videos = []
 if "summary_results_map" not in st.session_state:
     st.session_state.summary_results_map = {}
+if "selected_channels" not in st.session_state:
+    st.session_state.selected_channels = []
+if "known_channel_ids" not in st.session_state:
+    st.session_state.known_channel_ids = []
 
 base_channel_ids = settings.channel_ids_list
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
 channel_name_map = get_channel_name_map(tuple(all_channel_ids))
+
+# Sincroniza seleção com a lista atual e inclui IDs recém-adicionados.
+current_selected = [
+    cid for cid in st.session_state.selected_channels if cid in all_channel_ids
+]
+known_channel_ids = set(st.session_state.known_channel_ids)
+new_channel_ids = [cid for cid in all_channel_ids if cid not in known_channel_ids]
+if not current_selected and all_channel_ids:
+    current_selected = all_channel_ids.copy()
+elif new_channel_ids:
+    current_selected = dedupe_keep_order(current_selected + new_channel_ids)
+st.session_state.selected_channels = current_selected
+st.session_state.known_channel_ids = all_channel_ids.copy()
 
 with st.sidebar:
     st.subheader("Canais")
@@ -197,13 +218,26 @@ with st.sidebar:
             st.rerun()
 
     if all_channel_ids:
+        action_col1, action_col2 = st.columns(2)
+        with action_col1:
+            if st.button("Selecionar todos"):
+                st.session_state.selected_channels = all_channel_ids.copy()
+                st.rerun()
+        with action_col2:
+            if st.button("Limpar selecao"):
+                st.session_state.selected_channels = []
+                st.rerun()
+
         selected_channels = st.multiselect(
             "Channel IDs para consultar",
             options=all_channel_ids,
-            default=all_channel_ids,
+            key="selected_channels",
             format_func=lambda cid: (
                 f"{channel_name_map.get(cid, 'Canal nao encontrado')} ({cid})"
             ),
+        )
+        st.caption(
+            f"Total carregado: {len(all_channel_ids)} | Selecionados: {len(selected_channels)}"
         )
     else:
         selected_channels = []
