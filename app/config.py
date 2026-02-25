@@ -1,5 +1,43 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import re
+from pathlib import Path
+
 from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+CHANNEL_ID_PATTERN = re.compile(r"^UC[0-9A-Za-z_-]{22}$")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CHANNEL_IDS_FILES = ("channel_ids.txt", "Channel_ids.txt")
+
+
+def _dedupe_keep_order(values):
+    seen = set()
+    ordered = []
+    for value in values:
+        if value and value not in seen:
+            ordered.append(value)
+            seen.add(value)
+    return ordered
+
+
+def _parse_channel_ids(raw_value: str):
+    if not raw_value:
+        return []
+    parts = re.split(r"[\s,]+", raw_value.strip())
+    return [cid for cid in parts if cid and CHANNEL_ID_PATTERN.match(cid)]
+
+
+def _read_channel_ids_from_file():
+    for file_name in CHANNEL_IDS_FILES:
+        file_path = PROJECT_ROOT / file_name
+        if not file_path.exists():
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except Exception:
+            return []
+        return _parse_channel_ids(text)
+    return []
 
 
 class Settings(BaseSettings):
@@ -28,9 +66,9 @@ class Settings(BaseSettings):
     @property
     def channel_ids_list(self):
         """Retorna lista de channel IDs"""
-        if not self.channel_ids:
-            return []
-        return [cid.strip() for cid in self.channel_ids.split(",") if cid.strip()]
+        env_ids = _parse_channel_ids(self.channel_ids)
+        file_ids = _read_channel_ids_from_file()
+        return _dedupe_keep_order(env_ids + file_ids)
 
 
 def get_settings() -> Settings:
