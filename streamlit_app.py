@@ -57,9 +57,11 @@ def update_env_channel_ids(channel_ids):
 def get_channel_name_map(channel_ids):
     ids = dedupe_keep_order(channel_ids)
     if not ids:
-        return {}
+        return {}, 0, ""
 
     channel_name_map = {}
+    failed_chunks = 0
+    last_error = ""
     try:
         yt_service = YouTubeService()
         for start in range(0, len(ids), 50):
@@ -70,18 +72,20 @@ def get_channel_name_map(channel_ids):
                     id=",".join(chunk),
                     maxResults=50,
                 ).execute()
-            except Exception:
+            except Exception as exc:
                 # Ignora falha de um bloco e segue para os demais IDs.
+                failed_chunks += 1
+                last_error = str(exc)
                 continue
             for item in response.get("items", []):
                 channel_id = item.get("id", "")
                 channel_title = item.get("snippet", {}).get("title", "")
                 if channel_id and channel_title:
                     channel_name_map[channel_id] = channel_title
-    except Exception:
-        return {}
+    except Exception as exc:
+        return {}, max(1, failed_chunks), str(exc)
 
-    return channel_name_map
+    return channel_name_map, failed_chunks, last_error
 
 
 async def summarize_single_video(video):
@@ -190,7 +194,9 @@ if "channel_selection_map" not in st.session_state:
 
 base_channel_ids = settings.channel_ids_list
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
-channel_name_map = get_channel_name_map(tuple(all_channel_ids))
+channel_name_map, channel_name_failed_chunks, channel_name_last_error = get_channel_name_map(
+    tuple(all_channel_ids)
+)
 
 # Sincroniza estado da grade: canais novos entram selecionados por padrão.
 selection_map = st.session_state.channel_selection_map
@@ -202,6 +208,17 @@ st.session_state.selected_channels = [
 
 with st.sidebar:
     st.subheader("Canais")
+    if st.button("Recarregar nomes dos canais"):
+        get_channel_name_map.clear()
+        st.rerun()
+
+    if channel_name_failed_chunks > 0:
+        st.warning(
+            f"Falha ao carregar nomes de canais em {channel_name_failed_chunks} bloco(s)."
+        )
+        if channel_name_last_error:
+            st.caption(channel_name_last_error[:220])
+
     new_channel_id = st.text_input("Novo Channel ID", placeholder="UC...")
     if st.button("Adicionar channel ID"):
         if not new_channel_id.strip():
