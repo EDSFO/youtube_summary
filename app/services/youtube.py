@@ -1,6 +1,6 @@
 ﻿import logging
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 
 from googleapiclient.discovery import build
 
@@ -53,25 +53,38 @@ class YouTubeService:
                 start_date + timedelta(days=offset)
                 for offset in range((end_date - start_date).days + 1)
             }
+            oldest_date = min(valid_dates) if valid_dates else None
 
             if channel_ids:
                 selected_channels = [cid.strip() for cid in channel_ids if cid and cid.strip()]
             else:
                 selected_channels = self.settings.channel_ids_list
+            selected_channels = list(dict.fromkeys(selected_channels))
 
             all_videos = []
 
             if selected_channels:
+                # Low-cost flow:
+                # 1) channels.list(contentDetails) to get uploads playlist (cost 1 per request).
+                # 2) playlistItems.list per selected channel (cost 1 per request).
+                channel_metadata = self._get_channel_metadata(selected_channels)
                 for ch_id in selected_channels:
-                    videos = self._search_videos(
+                    metadata = channel_metadata.get(ch_id)
+                    if not metadata:
+                        logger.warning("Canal sem metadata ou playlist de uploads: %s", ch_id)
+                        continue
+
+                    videos = self._get_videos_from_uploads_playlist(
+                        playlist_id=metadata["uploads_playlist_id"],
                         channel_id=ch_id,
-                        published_after=published_after,
-                        published_before=published_before,
+                        fallback_channel_title=metadata.get("channel_title", ""),
                         valid_dates=valid_dates,
+                        oldest_date=oldest_date,
                     )
                     all_videos.extend(videos)
                     logger.info("Canal: %s - %s videos", ch_id, len(videos))
             else:
+                # Fallback keeps previous behavior for global search when no channels are configured.
                 logger.warning("Nenhum channel_id configurado no .env")
                 videos = self._search_videos(
                     channel_id=None,
@@ -86,6 +99,131 @@ class YouTubeService:
         except Exception as e:
             logger.error("Erro ao buscar videos no intervalo: %s", e)
             return []
+
+    @staticmethod
+    def _chunked(values, size: int):
+        for start in range(0, len(values), size):
+            yield values[start : start + size]
+
+    def _get_channel_metadata(self, channel_ids: Iterable[str]) -> Dict[str, Dict[str, str]]:
+        metadata = {}
+
+        for chunk in self._chunked(list(channel_ids), 50):
+            try:
+                response = (
+                    self.youtube.channels()
+                    .list(
+                        part="snippet,contentDetails",
+                        id=",".join(chunk),
+                        maxResults=50,
+                    )
+                    .execute()
+                )
+            except Exception as e:
+                logger.error("Erro ao carregar metadata de canais (chunk): %s", e)
+                continue
+
+            for item in response.get("items", []):
+                channel_id = item.get("id", "")
+                uploads_playlist_id = (
+                    item.get("contentDetails", {})
+                    .get("relatedPlaylists", {})
+                    .get("uploads", "")
+                )
+                channel_title = item.get("snippet", {}).get("title", "")
+
+                if channel_id and uploads_playlist_id:
+                    metadata[channel_id] = {
+                        "uploads_playlist_id": uploads_playlist_id,
+                        "channel_title": channel_title,
+                    }
+
+        return metadata
+
+    def _get_videos_from_uploads_playlist(
+        self,
+        playlist_id: str,
+        channel_id: str,
+        fallback_channel_title: str,
+        valid_dates=None,
+        oldest_date=None,
+        max_pages: int = 3,
+    ):
+        videos = []
+        page_token = None
+
+        for _ in range(max_pages):
+            params = {
+                "part": "snippet",
+                "playlistId": playlist_id,
+                "maxResults": 50,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            try:
+                response = self.youtube.playlistItems().list(**params).execute()
+            except Exception as e:
+                logger.error(
+                    "Erro ao buscar playlist de uploads (%s / %s): %s",
+                    channel_id,
+                    playlist_id,
+                    e,
+                )
+                break
+
+            stop_pagination = False
+            for item in response.get("items", []):
+                snippet = item.get("snippet", {})
+                resource = snippet.get("resourceId", {})
+                video_id = resource.get("videoId", "")
+                published_at = snippet.get("publishedAt", "")
+
+                if not video_id or not published_at:
+                    continue
+
+                try:
+                    published_date = datetime.fromisoformat(
+                        published_at.replace("Z", "+00:00")
+                    ).date()
+                except Exception:
+                    continue
+
+                if oldest_date and published_date < oldest_date:
+                    stop_pagination = True
+                    continue
+
+                if valid_dates and published_date not in valid_dates:
+                    continue
+
+                thumbnails = snippet.get("thumbnails", {})
+                thumbnail = (
+                    thumbnails.get("default", {}).get("url")
+                    or thumbnails.get("medium", {}).get("url")
+                    or ""
+                )
+
+                videos.append(
+                    {
+                        "video_id": video_id,
+                        "title": snippet.get("title", ""),
+                        "description": snippet.get("description", ""),
+                        "channel_title": snippet.get("channelTitle", "")
+                        or fallback_channel_title,
+                        "channel_id": snippet.get("channelId", "") or channel_id,
+                        "published_at": published_at,
+                        "thumbnail": thumbnail,
+                    }
+                )
+
+            if stop_pagination:
+                break
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return videos
 
     def _search_videos(
         self,
