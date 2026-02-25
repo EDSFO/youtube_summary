@@ -3,6 +3,7 @@ import asyncio
 from datetime import date, timedelta
 
 import httpx
+import pandas as pd
 import streamlit as st
 
 from app.config import get_settings
@@ -184,25 +185,20 @@ if "summary_results_map" not in st.session_state:
     st.session_state.summary_results_map = {}
 if "selected_channels" not in st.session_state:
     st.session_state.selected_channels = []
-if "known_channel_ids" not in st.session_state:
-    st.session_state.known_channel_ids = []
+if "channel_selection_map" not in st.session_state:
+    st.session_state.channel_selection_map = {}
 
 base_channel_ids = settings.channel_ids_list
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
 channel_name_map = get_channel_name_map(tuple(all_channel_ids))
 
-# Sincroniza seleção com a lista atual e inclui IDs recém-adicionados.
-current_selected = [
-    cid for cid in st.session_state.selected_channels if cid in all_channel_ids
+# Sincroniza estado da grade: canais novos entram selecionados por padrão.
+selection_map = st.session_state.channel_selection_map
+synced_selection_map = {cid: selection_map.get(cid, True) for cid in all_channel_ids}
+st.session_state.channel_selection_map = synced_selection_map
+st.session_state.selected_channels = [
+    cid for cid in all_channel_ids if synced_selection_map.get(cid, False)
 ]
-known_channel_ids = set(st.session_state.known_channel_ids)
-new_channel_ids = [cid for cid in all_channel_ids if cid not in known_channel_ids]
-if not current_selected and all_channel_ids:
-    current_selected = all_channel_ids.copy()
-elif new_channel_ids:
-    current_selected = dedupe_keep_order(current_selected + new_channel_ids)
-st.session_state.selected_channels = current_selected
-st.session_state.known_channel_ids = all_channel_ids.copy()
 
 with st.sidebar:
     st.subheader("Canais")
@@ -221,23 +217,63 @@ with st.sidebar:
         action_col1, action_col2 = st.columns(2)
         with action_col1:
             if st.button("Selecionar todos"):
+                st.session_state.channel_selection_map = {
+                    cid: True for cid in all_channel_ids
+                }
                 st.session_state.selected_channels = all_channel_ids.copy()
                 st.rerun()
         with action_col2:
             if st.button("Limpar selecao"):
+                st.session_state.channel_selection_map = {
+                    cid: False for cid in all_channel_ids
+                }
                 st.session_state.selected_channels = []
                 st.rerun()
 
-        selected_channels = st.multiselect(
-            "Channel IDs para consultar",
-            options=all_channel_ids,
-            key="selected_channels",
-            format_func=lambda cid: (
-                f"{channel_name_map.get(cid, 'Canal nao encontrado')} ({cid})"
-            ),
+        st.markdown("### Canais adicionados")
+        channel_df = pd.DataFrame(
+            [
+                {
+                    "Selecionar": st.session_state.channel_selection_map.get(
+                        channel_id, True
+                    ),
+                    "Canal": channel_name_map.get(channel_id, "Canal nao encontrado"),
+                    "Channel ID": channel_id,
+                }
+                for channel_id in all_channel_ids
+            ]
         )
+        edited_channel_df = st.data_editor(
+            channel_df,
+            use_container_width=True,
+            hide_index=True,
+            height=360,
+            disabled=["Canal", "Channel ID"],
+            column_config={
+                "Selecionar": st.column_config.CheckboxColumn(
+                    "Selecionar",
+                    help="Marque os canais que participam da busca por data.",
+                    default=True,
+                )
+            },
+            key="channels_grid_editor",
+        )
+
+        if st.button("Aplicar selecao da grade"):
+            selected_from_grid = edited_channel_df.loc[
+                edited_channel_df["Selecionar"] == True, "Channel ID"
+            ].tolist()
+            selected_set = set(selected_from_grid)
+            st.session_state.channel_selection_map = {
+                cid: (cid in selected_set) for cid in all_channel_ids
+            }
+            st.session_state.selected_channels = selected_from_grid
+            st.success(f"{len(selected_from_grid)} canais selecionados para consulta.")
+            st.rerun()
+
+        selected_channels = st.session_state.selected_channels
         st.caption(
-            f"Total carregado: {len(all_channel_ids)} | Selecionados: {len(selected_channels)}"
+            f"Total carregado: {len(all_channel_ids)} | Selecionados para busca: {len(selected_channels)}"
         )
     else:
         selected_channels = []
@@ -246,19 +282,6 @@ with st.sidebar:
     if st.button("Salvar channel IDs no .env"):
         update_env_channel_ids(all_channel_ids)
         st.success("CHANNEL_IDS salvo no .env")
-
-    st.markdown("### Canais adicionados")
-    if all_channel_ids:
-        channel_rows = [
-            {
-                "Canal": channel_name_map.get(channel_id, "Canal nao encontrado"),
-                "Channel ID": channel_id,
-            }
-            for channel_id in all_channel_ids
-        ]
-        st.dataframe(channel_rows, use_container_width=True, hide_index=True, height=360)
-    else:
-        st.caption("Nenhum canal adicionado.")
 
 col1, col2 = st.columns([1, 1])
 with col1:
