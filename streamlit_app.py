@@ -26,31 +26,66 @@ def dedupe_keep_order(values):
     return ordered
 
 
-def update_env_channel_ids(channel_ids):
+def update_env_list(key, values):
+    normalized_values = dedupe_keep_order(values)
     env_path = ".env"
     if not os.path.exists(env_path):
         with open(env_path, "w", encoding="utf-8") as file:
-            file.write(f"CHANNEL_IDS={','.join(channel_ids)}\n")
+            file.write(f"{key}={','.join(normalized_values)}\n")
         return
 
     with open(env_path, "r", encoding="utf-8") as file:
         lines = file.readlines()
 
-    key = "CHANNEL_IDS="
+    line_prefix = f"{key}="
     replaced = False
     for idx, line in enumerate(lines):
-        if line.startswith(key):
-            lines[idx] = f"{key}{','.join(channel_ids)}\n"
+        if line.startswith(line_prefix):
+            lines[idx] = f"{line_prefix}{','.join(normalized_values)}\n"
             replaced = True
             break
 
     if not replaced:
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
-        lines.append(f"{key}{','.join(channel_ids)}\n")
+        lines.append(f"{line_prefix}{','.join(normalized_values)}\n")
 
     with open(env_path, "w", encoding="utf-8") as file:
         file.writelines(lines)
+
+
+def update_env_channel_ids(channel_ids):
+    update_env_list("CHANNEL_IDS", channel_ids)
+
+
+def update_env_selected_channel_ids(channel_ids):
+    update_env_list("SELECTED_CHANNEL_IDS", channel_ids)
+
+
+def persist_selected_channels(selected_channels):
+    update_env_selected_channel_ids(selected_channels)
+
+
+def apply_selected_channels(all_channel_ids, selected_channels):
+    selected_set = set(dedupe_keep_order(selected_channels))
+    st.session_state.channel_selection_map = {
+        cid: (cid in selected_set) for cid in all_channel_ids
+    }
+    st.session_state.selected_channels = [
+        cid for cid in all_channel_ids if cid in selected_set
+    ]
+
+
+def env_key_exists(key):
+    env_path = ".env"
+    if not os.path.exists(env_path):
+        return False
+
+    try:
+        with open(env_path, "r", encoding="utf-8") as file:
+            return any(line.startswith(f"{key}=") for line in file.readlines())
+    except Exception:
+        return False
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -176,6 +211,18 @@ async def send_summary_to_telegram(video_with_summary):
 st.set_page_config(page_title="Resumo YouTube", layout="wide")
 st.title("Painel de Verificacao de Videos")
 st.caption("Escolha periodo e canais para conferir se houve publicacoes")
+with st.expander("Funcao dos botoes (guia rapido)"):
+    st.markdown(
+        "- `Recarregar nomes dos canais`: atualiza os nomes dos canais exibidos na grade.\n"
+        "- `Adicionar channel ID`: inclui um novo canal na lista carregada nesta sessao.\n"
+        "- `Selecionar todos`: marca todos os canais na grade.\n"
+        "- `Limpar selecao`: desmarca todos os canais na grade.\n"
+        "- `Aplicar selecao da grade`: usa a selecao atual apenas nesta sessao.\n"
+        "- `Fixar selecao no .env`: salva sua selecao para abrir o script ja com ela.\n"
+        "- `Salvar channel IDs no .env`: salva a lista completa de canais no `CHANNEL_IDS`.\n"
+        "- `Buscar videos`: busca videos no periodo e canais selecionados.\n"
+        "- `IA` (em cada video): gera resumo com IA e tenta enviar para o Telegram."
+    )
 
 if not settings.youtube_api_key:
     st.error("YOUTUBE_API_KEY nao encontrado no .env")
@@ -191,12 +238,25 @@ if "selected_channels" not in st.session_state:
     st.session_state.selected_channels = []
 if "channel_selection_map" not in st.session_state:
     st.session_state.channel_selection_map = {}
+if "persisted_selection_loaded" not in st.session_state:
+    st.session_state.persisted_selection_loaded = False
 
 base_channel_ids = settings.channel_ids_list
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
 channel_name_map, channel_name_failed_chunks, channel_name_last_error = get_channel_name_map(
     tuple(all_channel_ids)
 )
+
+if not st.session_state.persisted_selection_loaded:
+    has_saved_selection = env_key_exists("SELECTED_CHANNEL_IDS")
+    persisted_selected_set = set(settings.selected_channel_ids_list)
+    if has_saved_selection:
+        st.session_state.channel_selection_map = {
+            cid: (cid in persisted_selected_set) for cid in all_channel_ids
+        }
+    else:
+        st.session_state.channel_selection_map = {cid: True for cid in all_channel_ids}
+    st.session_state.persisted_selection_loaded = True
 
 # Sincroniza estado da grade: canais novos entram selecionados por padrão.
 selection_map = st.session_state.channel_selection_map
@@ -208,7 +268,10 @@ st.session_state.selected_channels = [
 
 with st.sidebar:
     st.subheader("Canais")
-    if st.button("Recarregar nomes dos canais"):
+    if st.button(
+        "Recarregar nomes dos canais",
+        help="Atualiza os nomes dos canais na grade lateral.",
+    ):
         get_channel_name_map.clear()
         st.rerun()
 
@@ -220,7 +283,10 @@ with st.sidebar:
             st.caption(channel_name_last_error[:220])
 
     new_channel_id = st.text_input("Novo Channel ID", placeholder="UC...")
-    if st.button("Adicionar channel ID"):
+    if st.button(
+        "Adicionar channel ID",
+        help="Inclui um novo canal na lista carregada nesta sessao.",
+    ):
         if not new_channel_id.strip():
             st.warning("Informe um channel ID")
         else:
@@ -233,18 +299,18 @@ with st.sidebar:
     if all_channel_ids:
         action_col1, action_col2 = st.columns(2)
         with action_col1:
-            if st.button("Selecionar todos"):
-                st.session_state.channel_selection_map = {
-                    cid: True for cid in all_channel_ids
-                }
-                st.session_state.selected_channels = all_channel_ids.copy()
+            if st.button(
+                "Selecionar todos",
+                help="Marca todos os canais na grade.",
+            ):
+                apply_selected_channels(all_channel_ids, all_channel_ids)
                 st.rerun()
         with action_col2:
-            if st.button("Limpar selecao"):
-                st.session_state.channel_selection_map = {
-                    cid: False for cid in all_channel_ids
-                }
-                st.session_state.selected_channels = []
+            if st.button(
+                "Limpar selecao",
+                help="Desmarca todos os canais na grade.",
+            ):
+                apply_selected_channels(all_channel_ids, [])
                 st.rerun()
 
         st.markdown("### Canais adicionados")
@@ -276,17 +342,31 @@ with st.sidebar:
             key="channels_grid_editor",
         )
 
-        if st.button("Aplicar selecao da grade"):
-            selected_from_grid = edited_channel_df.loc[
-                edited_channel_df["Selecionar"] == True, "Channel ID"
-            ].tolist()
-            selected_set = set(selected_from_grid)
-            st.session_state.channel_selection_map = {
-                cid: (cid in selected_set) for cid in all_channel_ids
-            }
-            st.session_state.selected_channels = selected_from_grid
-            st.success(f"{len(selected_from_grid)} canais selecionados para consulta.")
-            st.rerun()
+        selected_from_grid = edited_channel_df.loc[
+            edited_channel_df["Selecionar"] == True, "Channel ID"
+        ].tolist()
+        grid_action_col1, grid_action_col2 = st.columns(2)
+        with grid_action_col1:
+            if st.button(
+                "Aplicar selecao da grade",
+                help="Aplica a selecao atual da grade para a busca desta sessao.",
+            ):
+                apply_selected_channels(all_channel_ids, selected_from_grid)
+                st.success(
+                    f"{len(st.session_state.selected_channels)} canais selecionados para consulta."
+                )
+                st.rerun()
+        with grid_action_col2:
+            if st.button(
+                "Fixar selecao no .env",
+                help="Salva sua selecao atual no SELECTED_CHANNEL_IDS para reutilizar ao reabrir.",
+            ):
+                apply_selected_channels(all_channel_ids, selected_from_grid)
+                persist_selected_channels(st.session_state.selected_channels)
+                st.success(
+                    "Selecao fixada no .env. Na proxima abertura ela sera carregada automaticamente."
+                )
+                st.rerun()
 
         selected_channels = st.session_state.selected_channels
         st.caption(
@@ -296,7 +376,10 @@ with st.sidebar:
         selected_channels = []
         st.info("Nenhum channel ID configurado")
 
-    if st.button("Salvar channel IDs no .env"):
+    if st.button(
+        "Salvar channel IDs no .env",
+        help="Grava a lista completa de canais carregados no CHANNEL_IDS.",
+    ):
         update_env_channel_ids(all_channel_ids)
         st.success("CHANNEL_IDS salvo no .env")
 
@@ -311,7 +394,11 @@ if isinstance(start_date, tuple):
 if isinstance(end_date, tuple):
     end_date = end_date[0]
 
-if st.button("Buscar videos", type="primary"):
+if st.button(
+    "Buscar videos",
+    type="primary",
+    help="Busca videos no periodo informado usando somente os canais selecionados.",
+):
     if not selected_channels:
         st.warning("Adicione ou selecione ao menos um channel ID")
     else:
