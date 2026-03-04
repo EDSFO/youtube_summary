@@ -1,4 +1,5 @@
 ﻿import os
+import re
 import asyncio
 from datetime import date, timedelta
 
@@ -24,6 +25,18 @@ def dedupe_keep_order(values):
             ordered.append(cleaned)
             seen.add(cleaned)
     return ordered
+
+
+def get_settings_list(settings_obj, list_attr_name, raw_attr_name):
+    list_value = getattr(settings_obj, list_attr_name, None)
+    if isinstance(list_value, (list, tuple, set)):
+        return dedupe_keep_order(list(list_value))
+
+    raw_value = getattr(settings_obj, raw_attr_name, "")
+    if isinstance(raw_value, str) and raw_value.strip():
+        return dedupe_keep_order(re.split(r"[\s,]+", raw_value.strip()))
+
+    return []
 
 
 def update_env_list(key, values):
@@ -241,7 +254,7 @@ if "channel_selection_map" not in st.session_state:
 if "persisted_selection_loaded" not in st.session_state:
     st.session_state.persisted_selection_loaded = False
 
-base_channel_ids = settings.channel_ids_list
+base_channel_ids = get_settings_list(settings, "channel_ids_list", "channel_ids")
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
 channel_name_map, channel_name_failed_chunks, channel_name_last_error = get_channel_name_map(
     tuple(all_channel_ids)
@@ -249,7 +262,9 @@ channel_name_map, channel_name_failed_chunks, channel_name_last_error = get_chan
 
 if not st.session_state.persisted_selection_loaded:
     has_saved_selection = env_key_exists("SELECTED_CHANNEL_IDS")
-    persisted_selected_set = set(settings.selected_channel_ids_list)
+    persisted_selected_set = set(
+        get_settings_list(settings, "selected_channel_ids_list", "selected_channel_ids")
+    )
     if has_saved_selection:
         st.session_state.channel_selection_map = {
             cid: (cid in persisted_selected_set) for cid in all_channel_ids
