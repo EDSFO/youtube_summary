@@ -40,6 +40,13 @@ def _read_channel_ids_from_file():
     return []
 
 
+def _parse_topics(raw_value: str):
+    if not raw_value:
+        return []
+    parts = re.split(r"[\r\n,;]+", raw_value.strip())
+    return _dedupe_keep_order([part.strip() for part in parts if part and part.strip()])
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -50,6 +57,8 @@ class Settings(BaseSettings):
     # YouTube
     youtube_api_key: str = ""
     channel_ids: str = ""
+    selected_channel_ids: str = ""
+    search_topics: str = ""
 
     # OpenRouter
     openrouter_api_key: str = ""
@@ -69,6 +78,16 @@ class Settings(BaseSettings):
         env_ids = _parse_channel_ids(self.channel_ids)
         file_ids = _read_channel_ids_from_file()
         return _dedupe_keep_order(env_ids + file_ids)
+
+    @property
+    def selected_channel_ids_list(self):
+        """Retorna lista de channel IDs selecionados para busca."""
+        return _parse_channel_ids(self.selected_channel_ids)
+
+    @property
+    def search_topics_list(self):
+        """Retorna lista de assuntos para filtrar videos."""
+        return _parse_topics(self.search_topics)
 
 
 def get_settings() -> Settings:

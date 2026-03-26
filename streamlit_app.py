@@ -75,8 +75,18 @@ def update_env_selected_channel_ids(channel_ids):
     update_env_list("SELECTED_CHANNEL_IDS", channel_ids)
 
 
+def update_env_search_topics(topics):
+    update_env_list("SEARCH_TOPICS", topics)
+
+
 def persist_selected_channels(selected_channels):
     update_env_selected_channel_ids(selected_channels)
+
+
+def parse_topics(raw_value):
+    return dedupe_keep_order(
+        [part.strip() for part in re.split(r"[\r\n,;]+", raw_value or "") if part.strip()]
+    )
 
 
 def apply_selected_channels(all_channel_ids, selected_channels):
@@ -253,6 +263,8 @@ if "channel_selection_map" not in st.session_state:
     st.session_state.channel_selection_map = {}
 if "persisted_selection_loaded" not in st.session_state:
     st.session_state.persisted_selection_loaded = False
+if "search_topics_text" not in st.session_state:
+    st.session_state.search_topics_text = "\n".join(settings.search_topics_list)
 
 base_channel_ids = get_settings_list(settings, "channel_ids_list", "channel_ids")
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
@@ -404,6 +416,31 @@ with col1:
 with col2:
     end_date = st.date_input("Data final", value=date.today())
 
+st.subheader("Filtro por assuntos")
+st.caption(
+    "Cadastre um assunto por linha. A busca considera titulo e descricao do video."
+)
+st.text_area(
+    "Assuntos",
+    key="search_topics_text",
+    height=140,
+    placeholder="Ex.: IA\nOpenAI\nmercado financeiro",
+)
+topic_list = parse_topics(st.session_state.search_topics_text)
+topic_actions_col1, topic_actions_col2 = st.columns(2)
+with topic_actions_col1:
+    if st.button(
+        "Salvar assuntos no .env",
+        help="Persiste os assuntos para reutilizar nas proximas buscas.",
+    ):
+        update_env_search_topics(topic_list)
+        st.success("Assuntos salvos no .env")
+with topic_actions_col2:
+    if topic_list:
+        st.caption(f"{len(topic_list)} assunto(s) ativo(s) nesta busca")
+    else:
+        st.caption("Sem filtro de assuntos. A busca retorna todos os videos do periodo.")
+
 if isinstance(start_date, tuple):
     start_date = start_date[0]
 if isinstance(end_date, tuple):
@@ -423,6 +460,7 @@ if st.button(
                 start_date=start_date,
                 end_date=end_date,
                 channel_ids=selected_channels,
+                topics=topic_list,
             )
 
         st.session_state.filtered_videos = videos

@@ -1,4 +1,5 @@
-﻿import logging
+import logging
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, Optional
 
@@ -34,6 +35,7 @@ class YouTubeService:
         start_date,
         end_date,
         channel_ids: Optional[Iterable[str]] = None,
+        topics: Optional[Iterable[str]] = None,
     ):
         """Fetch videos in an inclusive UTC date range."""
         try:
@@ -60,6 +62,9 @@ class YouTubeService:
             else:
                 selected_channels = self.settings.channel_ids_list
             selected_channels = list(dict.fromkeys(selected_channels))
+            selected_topics = self._normalize_topics(
+                topics if topics is not None else self.settings.search_topics_list
+            )
 
             all_videos = []
 
@@ -80,6 +85,7 @@ class YouTubeService:
                         fallback_channel_title=metadata.get("channel_title", ""),
                         valid_dates=valid_dates,
                         oldest_date=oldest_date,
+                        topics=selected_topics,
                     )
                     all_videos.extend(videos)
                     logger.info("Canal: %s - %s videos", ch_id, len(videos))
@@ -91,6 +97,7 @@ class YouTubeService:
                     published_after=published_after,
                     published_before=published_before,
                     valid_dates=valid_dates,
+                    topics=selected_topics,
                 )
                 all_videos.extend(videos)
 
@@ -147,6 +154,7 @@ class YouTubeService:
         fallback_channel_title: str,
         valid_dates=None,
         oldest_date=None,
+        topics=None,
         max_pages: int = 3,
     ):
         videos = []
@@ -203,18 +211,18 @@ class YouTubeService:
                     or ""
                 )
 
-                videos.append(
-                    {
-                        "video_id": video_id,
-                        "title": snippet.get("title", ""),
-                        "description": snippet.get("description", ""),
-                        "channel_title": snippet.get("channelTitle", "")
-                        or fallback_channel_title,
-                        "channel_id": snippet.get("channelId", "") or channel_id,
-                        "published_at": published_at,
-                        "thumbnail": thumbnail,
-                    }
-                )
+                video = {
+                    "video_id": video_id,
+                    "title": snippet.get("title", ""),
+                    "description": snippet.get("description", ""),
+                    "channel_title": snippet.get("channelTitle", "")
+                    or fallback_channel_title,
+                    "channel_id": snippet.get("channelId", "") or channel_id,
+                    "published_at": published_at,
+                    "thumbnail": thumbnail,
+                }
+                if self._matches_topics(video, topics):
+                    videos.append(video)
 
             if stop_pagination:
                 break
@@ -231,6 +239,7 @@ class YouTubeService:
         published_after: str = None,
         published_before: str = None,
         valid_dates=None,
+        topics=None,
     ):
         """Fetch videos from search endpoint with date filter."""
         params = {
@@ -259,19 +268,45 @@ class YouTubeService:
                 if published_date not in valid_dates:
                     continue
 
-            videos.append(
-                {
-                    "video_id": item["id"]["videoId"],
-                    "title": item["snippet"]["title"],
-                    "description": item["snippet"]["description"],
-                    "channel_title": item["snippet"]["channelTitle"],
-                    "channel_id": item["snippet"]["channelId"],
-                    "published_at": published_at,
-                    "thumbnail": item["snippet"]["thumbnails"]["default"]["url"],
-                }
-            )
+            video = {
+                "video_id": item["id"]["videoId"],
+                "title": item["snippet"]["title"],
+                "description": item["snippet"]["description"],
+                "channel_title": item["snippet"]["channelTitle"],
+                "channel_id": item["snippet"]["channelId"],
+                "published_at": published_at,
+                "thumbnail": item["snippet"]["thumbnails"]["default"]["url"],
+            }
+            if self._matches_topics(video, topics):
+                videos.append(video)
 
         return videos
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value or "")
+        return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+    def _normalize_topics(self, topics: Optional[Iterable[str]]):
+        if not topics:
+            return []
+        normalized = []
+        seen = set()
+        for topic in topics:
+            cleaned = self._normalize_text((topic or "").strip())
+            if cleaned and cleaned not in seen:
+                normalized.append(cleaned)
+                seen.add(cleaned)
+        return normalized
+
+    def _matches_topics(self, video: Dict[str, str], topics: Optional[Iterable[str]]):
+        normalized_topics = self._normalize_topics(topics)
+        if not normalized_topics:
+            return True
+        haystack = self._normalize_text(
+            f"{video.get('title', '')} {video.get('description', '')}"
+        )
+        return any(topic in haystack for topic in normalized_topics)
 
     def get_video_details(self, video_id: str):
         """Get details for a specific video."""
