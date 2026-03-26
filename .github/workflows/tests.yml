@@ -35,3 +35,17 @@ jobs:
           HOST: 0.0.0.0
           PORT: 8000
         run: pytest tests -q
+
+      - name: Notify Telegram on success
+        if: success()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="✅ Testes passaram em ${{ github.repository }}%0AWorkflow: ${{ github.workflow }}%0ABranch: ${{ github.ref_name }}%0ACommit: ${{ github.sha }}"
+
+      - name: Notify Telegram on failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="❌ Testes falharam em ${{ github.repository }}%0AWorkflow: ${{ github.workflow }}%0ABranch: ${{ github.ref_name }}%0ACommit: ${{ github.sha }}"
