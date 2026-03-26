@@ -93,6 +93,15 @@ def parse_topics(raw_value):
     )
 
 
+def sync_persisted_filters_from_env():
+    refreshed_settings = get_settings()
+    st.session_state.search_topics_text = "\n".join(refreshed_settings.search_topics_list)
+    st.session_state.selected_llm_model = refreshed_settings.openrouter_model
+    st.session_state.persisted_topics_snapshot = st.session_state.search_topics_text
+    st.session_state.persisted_model_snapshot = st.session_state.selected_llm_model
+    return refreshed_settings
+
+
 def apply_selected_channels(all_channel_ids, selected_channels):
     selected_set = set(dedupe_keep_order(selected_channels))
     st.session_state.channel_selection_map = {
@@ -271,6 +280,10 @@ if "search_topics_text" not in st.session_state:
     st.session_state.search_topics_text = "\n".join(settings.search_topics_list)
 if "selected_llm_model" not in st.session_state:
     st.session_state.selected_llm_model = settings.openrouter_model
+if "persisted_topics_snapshot" not in st.session_state:
+    st.session_state.persisted_topics_snapshot = "\n".join(settings.search_topics_list)
+if "persisted_model_snapshot" not in st.session_state:
+    st.session_state.persisted_model_snapshot = settings.openrouter_model
 
 base_channel_ids = get_settings_list(settings, "channel_ids_list", "channel_ids")
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
@@ -440,7 +453,12 @@ with topic_actions_col1:
         help="Persiste os assuntos para reutilizar nas proximas buscas.",
     ):
         update_env_search_topics(topic_list)
-        st.success("Assuntos salvos no .env")
+        refreshed_settings = sync_persisted_filters_from_env()
+        if refreshed_settings.search_topics_list == topic_list:
+            st.success("Assuntos salvos no .env")
+        else:
+            st.warning("Os assuntos foram gravados, mas a leitura de volta nao bateu com o esperado.")
+        st.rerun()
 with topic_actions_col2:
     if topic_list:
         st.caption(f"{len(topic_list)} assunto(s) ativo(s) nesta busca")
@@ -465,7 +483,12 @@ with llm_actions_col1:
             st.warning("Informe um modelo antes de salvar.")
         else:
             update_env_value("OPENROUTER_MODEL", selected_model)
-            st.success("Modelo salvo no .env")
+            refreshed_settings = sync_persisted_filters_from_env()
+            if refreshed_settings.openrouter_model == selected_model:
+                st.success("Modelo salvo no .env")
+            else:
+                st.warning("O modelo foi gravado, mas a leitura de volta nao bateu com o esperado.")
+            st.rerun()
 with llm_actions_col2:
     current_model = (st.session_state.selected_llm_model or "").strip()
     if current_model:
