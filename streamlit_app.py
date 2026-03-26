@@ -79,6 +79,10 @@ def update_env_search_topics(topics):
     update_env_list("SEARCH_TOPICS", topics)
 
 
+def update_env_value(key, value):
+    update_env_list(key, [value] if value else [])
+
+
 def persist_selected_channels(selected_channels):
     update_env_selected_channel_ids(selected_channels)
 
@@ -146,7 +150,7 @@ def get_channel_name_map(channel_ids):
     return channel_name_map, failed_chunks, last_error
 
 
-async def summarize_single_video(video):
+async def summarize_single_video(video, model_name):
     db = Database()
     await db.init_db()
 
@@ -160,7 +164,7 @@ async def summarize_single_video(video):
             "created_at": saved.get("created_at", ""),
         }, False
 
-    openrouter = OpenRouterService()
+    openrouter = OpenRouterService(model=model_name)
     summary = openrouter.summarize_with_fallback(
         video.get("title", ""),
         video.get("description", ""),
@@ -265,6 +269,8 @@ if "persisted_selection_loaded" not in st.session_state:
     st.session_state.persisted_selection_loaded = False
 if "search_topics_text" not in st.session_state:
     st.session_state.search_topics_text = "\n".join(settings.search_topics_list)
+if "selected_llm_model" not in st.session_state:
+    st.session_state.selected_llm_model = settings.openrouter_model
 
 base_channel_ids = get_settings_list(settings, "channel_ids_list", "channel_ids")
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
@@ -441,6 +447,32 @@ with topic_actions_col2:
     else:
         st.caption("Sem filtro de assuntos. A busca retorna todos os videos do periodo.")
 
+st.subheader("Modelo de LLM")
+st.caption("Escolha o modelo usado na geracao dos resumos.")
+st.text_input(
+    "Modelo OpenRouter",
+    key="selected_llm_model",
+    placeholder="Ex.: openai/gpt-4o-mini ou anthropic/claude-3.5-sonnet",
+)
+llm_actions_col1, llm_actions_col2 = st.columns(2)
+with llm_actions_col1:
+    if st.button(
+        "Salvar modelo no .env",
+        help="Persiste o modelo escolhido em OPENROUTER_MODEL.",
+    ):
+        selected_model = (st.session_state.selected_llm_model or "").strip()
+        if not selected_model:
+            st.warning("Informe um modelo antes de salvar.")
+        else:
+            update_env_value("OPENROUTER_MODEL", selected_model)
+            st.success("Modelo salvo no .env")
+with llm_actions_col2:
+    current_model = (st.session_state.selected_llm_model or "").strip()
+    if current_model:
+        st.caption(f"Modelo ativo para novos resumos: `{current_model}`")
+    else:
+        st.caption("Informe um modelo para gerar os proximos resumos.")
+
 if isinstance(start_date, tuple):
     start_date = start_date[0]
 if isinstance(end_date, tuple):
@@ -498,8 +530,14 @@ if st.session_state.filtered_videos:
                 if not settings.openrouter_api_key:
                     st.error("OPENROUTER_API_KEY nao encontrado no .env")
                 else:
+                    selected_model = (st.session_state.selected_llm_model or "").strip()
+                    if not selected_model:
+                        st.error("Informe um modelo de LLM antes de gerar o resumo.")
+                        continue
                     with st.spinner("Gerando resumo..."):
-                        summary_item, created_now = asyncio.run(summarize_single_video(item))
+                        summary_item, created_now = asyncio.run(
+                            summarize_single_video(item, selected_model)
+                        )
                         sent_ok, sent_error = asyncio.run(send_summary_to_telegram(summary_item))
                     st.session_state.summary_results_map[item["video_id"]] = summary_item
                     if created_now:

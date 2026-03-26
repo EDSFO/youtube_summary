@@ -6,13 +6,13 @@ logger = logging.getLogger(__name__)
 
 
 class OpenRouterService:
-    def __init__(self):
+    def __init__(self, model: str = None):
         settings = get_settings()
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=settings.openrouter_api_key,
         )
-        self.model = settings.openrouter_model
+        self.model = (model or settings.openrouter_model).strip()
 
     def summarize_video(self, title: str, description: str) -> str:
         """Gerar resumo de um vídeo usando IA"""
@@ -52,11 +52,11 @@ Resumir os principais pontos abordados no vídeo.
 
     def summarize_with_fallback(self, title: str, description: str, video_id: str) -> str:
         """Tentar gerar resumo com fallback para modelos alternativos"""
-        models_to_try = [
-            self.model,
-            "gpt-3.5-turbo",
-            "claude-3-haiku"
-        ]
+        models_to_try = []
+        for model in [self.model, "gpt-3.5-turbo", "claude-3-haiku"]:
+            cleaned = (model or "").strip()
+            if cleaned and cleaned not in models_to_try:
+                models_to_try.append(cleaned)
 
         for model in models_to_try:
             try:
