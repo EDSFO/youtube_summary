@@ -8,9 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from app.config import get_settings
-from app.models.database import Database
 from app.services.openrouter import OpenRouterService
 from app.services.telegram import TelegramService
+from app.services.transcript import TranscriptService
 from app.services.youtube import YouTubeService
 
 settings = get_settings()
@@ -95,10 +95,14 @@ def parse_topics(raw_value):
 
 def sync_persisted_filters_from_env():
     refreshed_settings = get_settings()
-    st.session_state.search_topics_text = "\n".join(refreshed_settings.search_topics_list)
-    st.session_state.selected_llm_model = refreshed_settings.openrouter_model
-    st.session_state.persisted_topics_snapshot = st.session_state.search_topics_text
-    st.session_state.persisted_model_snapshot = st.session_state.selected_llm_model
+    persisted_topics_text = "\n".join(refreshed_settings.search_topics_list)
+    persisted_model = refreshed_settings.openrouter_model
+    # Widgets do Streamlit nao podem ser sobrescritos depois de instanciados
+    # no mesmo ciclo. Guardamos os valores para aplicar no proximo rerun.
+    st.session_state.pending_search_topics_text = persisted_topics_text
+    st.session_state.pending_selected_llm_model = persisted_model
+    st.session_state.persisted_topics_snapshot = persisted_topics_text
+    st.session_state.persisted_model_snapshot = persisted_model
     return refreshed_settings
 
 
@@ -160,42 +164,22 @@ def get_channel_name_map(channel_ids):
 
 
 async def summarize_single_video(video, model_name):
-    db = Database()
-    await db.init_db()
-
-    saved_map = await db.get_summaries_by_video_ids([video["video_id"]])
-    saved = saved_map.get(video["video_id"])
-    if saved:
-        return {
-            **video,
-            "summary": saved.get("summary", ""),
-            "model_used": saved.get("model_used", ""),
-            "created_at": saved.get("created_at", ""),
-        }, False
-
     openrouter = OpenRouterService(model=model_name)
-    summary = openrouter.summarize_with_fallback(
+    transcript_service = TranscriptService()
+    transcript_text = transcript_service.get_transcript_text(video["video_id"])
+    summary, model_used = openrouter.summarize_transcript_with_fallback(
         video.get("title", ""),
+        transcript_text,
         video.get("description", ""),
         video["video_id"],
     )
 
-    await db.mark_video_processed(
-        video["video_id"],
-        video.get("title", ""),
-        video.get("channel_id", ""),
-        video.get("channel_title", ""),
-        summary,
-        openrouter.model,
-    )
-
-    saved_map = await db.get_summaries_by_video_ids([video["video_id"]])
-    saved = saved_map.get(video["video_id"], {})
     return {
         **video,
-        "summary": saved.get("summary", summary),
-        "model_used": saved.get("model_used", openrouter.model),
-        "created_at": saved.get("created_at", ""),
+        "summary": summary,
+        "model_used": model_used,
+        "created_at": "",
+        "summary_source": "transcript" if transcript_text else "metadata",
     }, True
 
 
@@ -253,7 +237,7 @@ with st.expander("Funcao dos botoes (guia rapido)"):
         "- `Adicionar channel ID`: inclui um novo canal na lista carregada nesta sessao.\n"
         "- `Selecionar todos`: marca todos os canais na grade.\n"
         "- `Limpar selecao`: desmarca todos os canais na grade.\n"
-        "- `Aplicar selecao da grade`: usa a selecao atual apenas nesta sessao.\n"
+        "- `Aplicar selecao da grade`: aplica e salva a selecao atual para reabrir o sistema com ela.\n"
         "- `Fixar selecao no .env`: salva sua selecao para abrir o script ja com ela.\n"
         "- `Salvar channel IDs no .env`: salva a lista completa de canais no `CHANNEL_IDS`.\n"
         "- `Buscar videos`: busca videos no periodo e canais selecionados.\n"
@@ -284,6 +268,12 @@ if "persisted_topics_snapshot" not in st.session_state:
     st.session_state.persisted_topics_snapshot = "\n".join(settings.search_topics_list)
 if "persisted_model_snapshot" not in st.session_state:
     st.session_state.persisted_model_snapshot = settings.openrouter_model
+if "pending_search_topics_text" in st.session_state:
+    st.session_state.search_topics_text = st.session_state.pending_search_topics_text
+    del st.session_state.pending_search_topics_text
+if "pending_selected_llm_model" in st.session_state:
+    st.session_state.selected_llm_model = st.session_state.pending_selected_llm_model
+    del st.session_state.pending_selected_llm_model
 
 base_channel_ids = get_settings_list(settings, "channel_ids_list", "channel_ids")
 all_channel_ids = dedupe_keep_order(base_channel_ids + st.session_state.extra_channel_ids)
@@ -350,6 +340,7 @@ with st.sidebar:
                 help="Marca todos os canais na grade.",
             ):
                 apply_selected_channels(all_channel_ids, all_channel_ids)
+                persist_selected_channels(st.session_state.selected_channels)
                 st.rerun()
         with action_col2:
             if st.button(
@@ -357,6 +348,7 @@ with st.sidebar:
                 help="Desmarca todos os canais na grade.",
             ):
                 apply_selected_channels(all_channel_ids, [])
+                persist_selected_channels(st.session_state.selected_channels)
                 st.rerun()
 
         st.markdown("### Canais adicionados")
@@ -395,11 +387,12 @@ with st.sidebar:
         with grid_action_col1:
             if st.button(
                 "Aplicar selecao da grade",
-                help="Aplica a selecao atual da grade para a busca desta sessao.",
+                help="Aplica a selecao atual e salva em SELECTED_CHANNEL_IDS para reutilizar ao reabrir.",
             ):
                 apply_selected_channels(all_channel_ids, selected_from_grid)
+                persist_selected_channels(st.session_state.selected_channels)
                 st.success(
-                    f"{len(st.session_state.selected_channels)} canais selecionados para consulta."
+                    f"{len(st.session_state.selected_channels)} canais selecionados e salvos para a proxima abertura."
                 )
                 st.rerun()
         with grid_action_col2:
@@ -563,10 +556,12 @@ if st.session_state.filtered_videos:
                         )
                         sent_ok, sent_error = asyncio.run(send_summary_to_telegram(summary_item))
                     st.session_state.summary_results_map[item["video_id"]] = summary_item
-                    if created_now:
-                        st.success("Resumo gerado e salvo no banco.")
-                    else:
-                        st.info("Resumo ja existente. Exibindo resultado salvo.")
+                    source_label = (
+                        "transcricao"
+                        if summary_item.get("summary_source") == "transcript"
+                        else "metadados"
+                    )
+                    st.success(f"Resumo gerado usando {source_label}.")
                     if sent_ok:
                         st.success("Resumo enviado para o Telegram.")
                     else:
@@ -585,5 +580,7 @@ if all_summaries_to_show:
             st.write(f"Criado em: {item['created_at']}")
         if item.get("model_used"):
             st.write(f"Modelo: {item['model_used']}")
+        if item.get("summary_source"):
+            st.write(f"Fonte: {item['summary_source']}")
         st.write(item.get("summary", "Sem resumo"))
         st.divider()
